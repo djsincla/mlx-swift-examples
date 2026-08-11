@@ -142,6 +142,12 @@ private class Qwen2ModelInner: Module {
     fileprivate let layers: [TransformerBlock]
     let norm: RMSNorm
 
+    // dAI: which slice of the layers this machine holds, and how to reach the
+    // machines either side. Defaults to the whole model on one machine, so
+    // nothing changes for the ordinary case.
+    fileprivate var split: PipelineSplit?
+    fileprivate var transport: PipelineTransport?
+
     public init(_ args: Qwen2Configuration) {
         precondition(args.vocabularySize > 0)
 
@@ -155,17 +161,80 @@ private class Qwen2ModelInner: Module {
         self.norm = RMSNorm(dimensions: args.hiddenSize, eps: args.rmsNormEps)
     }
 
+    /// dAI: keep only the layers this machine owns.
+    ///
+    /// Dropping the others is what saves the memory: weights are materialised
+    /// lazily, so a layer nothing references is never read off disk. Copying
+    /// the whole model and deleting afterwards would need the memory first,
+    /// which is the thing there is not enough of.
+    /// dAI: record which slice this machine is running and how to reach the
+    /// neighbours. It deliberately does *not* shorten `layers`.
+    ///
+    /// An earlier version did, and it was wrong in a way that took a while to
+    /// see. `Module.init` snapshots every child into a private cache, and
+    /// `items()` returns that cache rather than re-reading the properties. So a
+    /// layer array replaced after `init` is visible to the forward pass, which
+    /// reads the property, and invisible to quantisation and weight loading,
+    /// which read the cache. The model then ran twelve layers while being
+    /// quantised and verified as twenty-four.
+    ///
+    /// The model is therefore built with only the layers it owns, by giving the
+    /// constructor a reduced `num_hidden_layers`. By the time this is called,
+    /// `layers` already holds exactly this machine's slice.
+    fileprivate func applyPipeline(_ split: PipelineSplit, transport: PipelineTransport) {
+        self.split = split
+        self.transport = transport
+    }
+
     public func callAsFunction(_ inputs: MLXArray, cache: [KVCache]? = nil) -> MLXArray {
         var h = embedTokens(inputs)
 
         let mask = createAttentionMask(h: h, cache: cache)
 
+        // dAI: take the hidden state from the machine holding the earlier
+        // layers, unless this machine holds them itself. Ranks are assigned in
+        // reverse, so the previous slice lives at rank + 1.
+        if let split, let transport, !split.isFirst {
+            do {
+                h = try transport.receive(like: h, from: split.rank + 1)
+            } catch {
+                // Propagated as a fatal shape error rather than swallowed: a
+                // pipeline that carries on with the wrong hidden state produces
+                // a fluent answer from the wrong numbers, which is far worse
+                // than stopping.
+                fatalError("pipeline receive failed: \(error)")
+            }
+        }
+
         for (i, layer) in layers.enumerated() {
             h = layer(h, mask: mask, cache: cache?[i])
         }
 
+        // dAI: hand it on, unless this machine holds the final layers and is
+        // the one that will produce the token.
+        if let split, let transport, !split.isLast {
+            do {
+                try transport.send(h, to: split.rank - 1)
+            } catch {
+                fatalError("pipeline send failed: \(error)")
+            }
+        }
+
         return norm(h)
     }
+}
+
+// dAI: splitting this model across machines. Upstream has the mechanism but
+// applies it only to certain mixture-of-experts architectures, so no released
+// version pipelines Qwen.
+extension Qwen2Model: Pipelineable {
+    public func pipeline(_ split: PipelineSplit, transport: PipelineTransport) {
+        model.applyPipeline(split, transport: transport)
+    }
+
+    /// How many layers this machine will actually run, for a caller that wants
+    /// to report or check the division.
+    public var pipelineLayerCount: Int { model.layers.count }
 }
 
 public class Qwen2Model: Module, LLMModel, KVCacheDimensionProvider {

@@ -64,7 +64,10 @@ public func downloadModel(
 public func loadWeights(
     modelDirectory: URL, model: LanguageModel,
     quantization: BaseConfiguration.Quantization? = nil,
-    perLayerQuantization: BaseConfiguration.PerLayerQuantization? = nil
+    perLayerQuantization: BaseConfiguration.PerLayerQuantization? = nil,
+    // dAI: the slice of layers this machine holds, when a model is split across
+    // several. Nil means the whole model, which is every ordinary case.
+    keepingLayers: Range<Int>? = nil
 ) throws {
     // load the weights
     var weights = [String: MLXArray]()
@@ -81,6 +84,21 @@ public func loadWeights(
 
     // per-model cleanup
     weights = model.sanitize(weights: weights)
+
+    // dAI: drop the layers this machine does not own, and renumber the rest.
+    //
+    // This is where the memory saving actually happens. The weights are only
+    // materialised when something references them, so a layer removed here is
+    // never read off disk: that is how a 41GB model becomes 21GB on each of two
+    // machines rather than needing 41GB somewhere first.
+    //
+    // Renumbering is necessary because the layer array was shortened rather
+    // than padded, so what was layer 40 is now layer 0. Loading unrenumbered
+    // weights would either fail verification or, worse, quietly put layer 40's
+    // weights into layer 0's slot.
+    if let keep = keepingLayers, keep.lowerBound > 0 || keep.count > 0 {
+        weights = renumberLayers(weights, keeping: keep)
+    }
 
     // quantize if needed
     if quantization != nil || perLayerQuantization != nil {
@@ -102,4 +120,33 @@ public func loadWeights(
     try model.update(parameters: parameters, verify: [.all])
 
     eval(model)
+}
+
+/// dAI: keep only the weights for a range of layers, renumbered from zero.
+///
+/// Keys look like `model.layers.42.self_attn.q_proj.weight`. A machine holding
+/// layers 40 to 79 has them as its own layers 0 to 39, so the index has to move
+/// with them. Anything that is not a layer - embeddings, the final norm, the
+/// output head - is kept as it is, because every machine loads a small number of
+/// those and only the last one uses the head.
+func renumberLayers(_ weights: [String: MLXArray], keeping: Range<Int>) -> [String: MLXArray] {
+    var out: [String: MLXArray] = [:]
+    out.reserveCapacity(weights.count)
+
+    for (key, value) in weights {
+        let parts = key.split(separator: ".", omittingEmptySubsequences: false)
+        // Find "layers" followed by a number, wherever it sits in the path.
+        guard let at = parts.firstIndex(of: "layers"), at + 1 < parts.count,
+              let index = Int(parts[at + 1])
+        else {
+            out[key] = value
+            continue
+        }
+        guard keeping.contains(index) else { continue }
+
+        var renumbered = parts
+        renumbered[at + 1] = Substring(String(index - keeping.lowerBound))
+        out[renumbered.joined(separator: ".")] = value
+    }
+    return out
 }
