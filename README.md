@@ -1,3 +1,7 @@
+> **This is a fork of [ml-explore/mlx-swift-examples](https://github.com/ml-explore/mlx-swift-examples)** (MIT), branched at `9bff95c`, adding pipeline parallelism for dense Qwen models on branch `dai-pipeline`.
+> Four files differ. See **[DAI-FORK.md](DAI-FORK.md)** for what changed, why, and who uses it.
+> Upstream's own documentation follows unchanged.
+
 # Documentation
 
 Developers can use these examples in their own programs -- just import the swift package!
