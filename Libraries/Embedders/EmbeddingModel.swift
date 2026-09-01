@@ -1,4 +1,9 @@
 // Copyright © 2024 Apple Inc.
+//
+// Upstream: ml-explore/mlx-swift-examples, MIT (c) 2024 ml-explore.
+// Modified for dAI in 2026: `EmbeddingModelOutput.hiddenStates` and
+// `pooledOutput` are public rather than internal, so pooling can be done
+// outside this library. The change is commented where it is made.
 
 import Foundation
 @preconcurrency import Hub
@@ -87,8 +92,20 @@ extension Module {
 }
 
 public struct EmbeddingModelOutput {
-    let hiddenStates: MLXArray?
-    let pooledOutput: MLXArray?
+    // Public rather than internal, which is a deliberate delta from upstream.
+    //
+    // Pooling has to happen outside this library for us. Its loadPooling reads
+    // 1_Pooling/config.json and silently falls back to Strategy.none when the
+    // file is absent, and the mlx-community conversions we stage do not ship
+    // that directory: the result is unpooled hidden states presented as an
+    // embedding. Its .last strategy is also padding-unaware, taking the final
+    // position of a padded sequence, so a short input batched with a long one
+    // would pool from padding.
+    //
+    // DaiWorker/EmbedRuntime pools per row from each row's real token count,
+    // which needs these. See docs/EMBEDDINGS_PLAN.md.
+    public let hiddenStates: MLXArray?
+    public let pooledOutput: MLXArray?
 }
 
 public protocol EmbeddingModel: Module {

@@ -4,6 +4,11 @@
 //
 //  Created by John Mai on 2024/3/3.
 //
+//  Upstream: ml-explore/mlx-swift-examples, MIT (c) 2024 ml-explore.
+//  Modified for dAI in 2026 to add pipeline parallelism: this machine takes the
+//  hidden state from the one holding the earlier layers, and hands its own on.
+//  Every change is marked `dAI:`.
+//
 
 import Foundation
 import MLX
@@ -147,6 +152,9 @@ private class Qwen2ModelInner: Module {
     // nothing changes for the ordinary case.
     fileprivate var split: PipelineSplit?
     fileprivate var transport: PipelineTransport?
+    // dAI: where a send or receive failure goes, since a forward pass cannot
+    // throw one. Checked by the caller after every step.
+    fileprivate var fault: PipelineFault?
 
     public init(_ args: Qwen2Configuration) {
         precondition(args.vocabularySize > 0)
@@ -181,9 +189,11 @@ private class Qwen2ModelInner: Module {
     /// The model is therefore built with only the layers it owns, by giving the
     /// constructor a reduced `num_hidden_layers`. By the time this is called,
     /// `layers` already holds exactly this machine's slice.
-    fileprivate func applyPipeline(_ split: PipelineSplit, transport: PipelineTransport) {
+    fileprivate func applyPipeline(_ split: PipelineSplit, transport: PipelineTransport,
+                                   fault: PipelineFault) {
         self.split = split
         self.transport = transport
+        self.fault = fault
     }
 
     public func callAsFunction(_ inputs: MLXArray, cache: [KVCache]? = nil) -> MLXArray {
@@ -198,11 +208,13 @@ private class Qwen2ModelInner: Module {
             do {
                 h = try transport.receive(like: h, from: split.rank + 1)
             } catch {
-                // Propagated as a fatal shape error rather than swallowed: a
-                // pipeline that carries on with the wrong hidden state produces
-                // a fluent answer from the wrong numbers, which is far worse
-                // than stopping.
-                fatalError("pipeline receive failed: \(error)")
+                // Recorded and abandoned, never swallowed. A pipeline that
+                // carries on with the wrong hidden state answers fluently from
+                // the wrong numbers, which is far worse than stopping - so this
+                // stops, and returns something the caller is required to throw
+                // away rather than sample.
+                fault?.record(PipelineStep.receiveFailed(rank: split.rank, cause: error))
+                return norm(h)
             }
         }
 
@@ -216,7 +228,12 @@ private class Qwen2ModelInner: Module {
             do {
                 try transport.send(h, to: split.rank - 1)
             } catch {
-                fatalError("pipeline send failed: \(error)")
+                // This machine has done its share and cannot hand it on. Its
+                // own return value was never worth anything - only the rank
+                // holding the head produces a token - so there is nothing to
+                // salvage and nothing to protect: record it and let the caller
+                // report which rank broke.
+                fault?.record(PipelineStep.sendFailed(rank: split.rank, cause: error))
             }
         }
 
@@ -228,8 +245,9 @@ private class Qwen2ModelInner: Module {
 // applies it only to certain mixture-of-experts architectures, so no released
 // version pipelines Qwen.
 extension Qwen2Model: Pipelineable {
-    public func pipeline(_ split: PipelineSplit, transport: PipelineTransport) {
-        model.applyPipeline(split, transport: transport)
+    public func pipeline(_ split: PipelineSplit, transport: PipelineTransport,
+                         fault: PipelineFault) {
+        model.applyPipeline(split, transport: transport, fault: fault)
     }
 
     /// How many layers this machine will actually run, for a caller that wants

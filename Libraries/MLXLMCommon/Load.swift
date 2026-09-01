@@ -1,4 +1,8 @@
 // Copyright © 2024 Apple Inc.
+//
+// Upstream: ml-explore/mlx-swift-examples, MIT (c) 2024 ml-explore.
+// Modified for dAI in 2026: `loadWeights(..., keepingLayers:)` drops the layers
+// this machine does not own and renumbers the rest. Changes are marked `dAI:`.
 
 import Foundation
 import Hub

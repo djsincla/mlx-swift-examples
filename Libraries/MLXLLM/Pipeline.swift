@@ -82,9 +82,85 @@ public struct PipelineSplit: Sendable, Equatable {
     }
 }
 
+/// Where a transport failure goes when there is nowhere to throw it.
+///
+/// A forward pass cannot throw: `Module` calls it through a non-throwing
+/// signature, and every model in the library would have to change to make it
+/// otherwise. The first version resolved that with `fatalError`, on the
+/// reasoning that a pipeline carrying on with the wrong hidden state answers
+/// fluently from the wrong numbers, which is worse than stopping.
+///
+/// That reasoning is right about continuing and wrong about stopping. On real
+/// hardware a peer that never completed its handshake killed the daemon on both
+/// machines in the gang - taking down unrelated harvest work, telling the
+/// control plane nothing, and leaving the other ranks to time out on their own.
+/// A split that cannot come together has to fail the request, not the node.
+///
+/// So the failure is latched here and the caller checks after the step. The
+/// forward pass still stops doing useful work the moment it knows, and what it
+/// returns afterwards is meaningless - which is safe only because nobody reads
+/// it: `SplitRunner` throws before the logits are ever sampled.
+public final class PipelineFault: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Error?
+
+    public init() {}
+
+    /// The first failure wins. Later ones are consequences of it - a send that
+    /// fails because the peer went away reports the same broken link twice, and
+    /// the first report is the one that says what actually happened.
+    public func record(_ error: Error) {
+        lock.lock()
+        defer { lock.unlock() }
+        if stored == nil { stored = error }
+    }
+
+    /// Whether the forward pass should give up. Read inside the model, where
+    /// there is no way to signal anything else.
+    public var occurred: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored != nil
+    }
+
+    /// What went wrong, if anything. Clears, so a caller that keeps running
+    /// after handling one failure is not handed it a second time.
+    public func take() -> Error? {
+        lock.lock()
+        defer { lock.unlock() }
+        defer { stored = nil }
+        return stored
+    }
+}
+
 /// A model that can be divided across machines.
 public protocol Pipelineable: AnyObject {
     /// Keep only the layers this machine owns, and route the hidden state
     /// through the supplied transport.
-    func pipeline(_ split: PipelineSplit, transport: PipelineTransport)
+    ///
+    /// `fault` is where a send or receive failure is recorded, since the
+    /// forward pass has no way to throw one.
+    func pipeline(_ split: PipelineSplit, transport: PipelineTransport,
+                  fault: PipelineFault)
+}
+
+/// What a rank was doing when the link failed.
+///
+/// Named rather than passed through raw, because the transport's own error says
+/// what went wrong with the socket and not which machine noticed. A gang that
+/// breaks reports one line per rank, and "rank 1 could not hand its hidden state
+/// on" is the difference between knowing where the pipeline stopped and reading
+/// the same TLS error twice.
+public enum PipelineStep: Error, CustomStringConvertible {
+    case sendFailed(rank: Int, cause: Error)
+    case receiveFailed(rank: Int, cause: Error)
+
+    public var description: String {
+        switch self {
+        case let .sendFailed(rank, cause):
+            return "rank \(rank) could not hand its hidden state on: \(cause)"
+        case let .receiveFailed(rank, cause):
+            return "rank \(rank) never received a hidden state: \(cause)"
+        }
+    }
 }
