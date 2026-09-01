@@ -3,7 +3,7 @@
 Upstream is **[ml-explore/mlx-swift-examples](https://github.com/ml-explore/mlx-swift-examples)**,
 MIT © 2024 ml-explore, and this fork remains MIT. Branched at `9bff95c`
 (mlx-swift 0.29.1). Nothing upstream has been relicensed and no copyright notice
-removed — every upstream commit here is byte-identical to upstream's, same shas,
+removed - every upstream commit here is byte-identical to upstream's, same shas,
 same authors.
 
 The branch that matters is **`dai-pipeline`**.
@@ -12,7 +12,7 @@ The branch that matters is **`dai-pipeline`**.
 
 Upstream has no pipeline parallelism for Qwen. Python `mlx-lm` has it and applies
 it only to certain mixture-of-experts architectures. And `mlx-swift` excludes
-distributed support deliberately — its `Package.swift` leaves out `ring.cpp`,
+distributed support deliberately - its `Package.swift` leaves out `ring.cpp`,
 `mpi.cpp` and `nccl.cpp` and compiles the `no_ring.cpp` stub instead.
 
 So a dense model too large for any single machine cannot be served at all. That
@@ -51,9 +51,9 @@ flowchart TB
   nb -->|"HTTP: asks the gateway<br/>to generate an answer"| dai
 ```
 
-- **[dAI](https://github.com/djsincla/dAI)** — distributed AI on harvested Apple
+- **[dAI](https://github.com/djsincla/dAI)** - distributed AI on harvested Apple
   Silicon. Uses `MLXLLM` and `MLXLMCommon`, and the split is why this fork exists.
-- **[notebookMLX](https://github.com/djsincla/notebookMLX)** — a document app.
+- **[notebookMLX](https://github.com/djsincla/notebookMLX)** - a document app.
   Uses `MLXEmbedders`.
 
 Both pin **the same exact revision**, and must: two copies at different revisions
