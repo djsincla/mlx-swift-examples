@@ -91,13 +91,21 @@ jobs:
           TITLE: Upstream has changed files this fork modifies
         run: |
           set -euo pipefail
-          existing=$(gh issue list --state open --search "$TITLE in:title" \
-            --json number --jq '.[0].number // empty')
+          # REST, not `gh issue create`. That wraps the GraphQL createIssue
+          # mutation, which GITHUB_TOKEN is refused - "Resource not accessible
+          # by integration" - even with Issues: write in the permissions block
+          # and in the token the run logs. The REST endpoint with the same token
+          # works. Worth the comment: the log says the permission is granted, so
+          # the obvious diagnosis is wrong.
+          repo="${GITHUB_REPOSITORY}"
+          existing=$(gh api "repos/$repo/issues?state=open" \
+            --jq "[.[] | select(.title == \"$TITLE\")][0].number // empty")
           if [ -n "$existing" ]; then
-            gh issue edit "$existing" --body "$BODY"
+            gh api -X PATCH "repos/$repo/issues/$existing" -f body="$BODY" --silent
             echo "updated issue #$existing"
           else
-            gh issue create --title "$TITLE" --body "$BODY"
+            gh api -X POST "repos/$repo/issues" -f title="$TITLE" -f body="$BODY" \
+              --jq '"opened issue #\(.number)"'
           fi
 
       - name: Say so when there is nothing to do
