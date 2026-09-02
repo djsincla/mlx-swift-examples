@@ -61,6 +61,42 @@ could pool or normalise differently, and an index built by one would be silently
 incomparable with a query from the other. Each has a `ForkPinTests` binding its
 resolved revision to the one its `NOTICE` names.
 
+## Keeping up with upstream
+
+A fork rots quietly. This one was **eight months and 27 commits behind** before
+anyone counted, and three of the four files it changes had moved upstream in the
+meantime. `9bff95c` reads as recent because it is a release tag; it is from
+October 2025.
+
+`.github/workflows/upstream-watch.yml` runs weekly and opens an issue **only**
+when upstream touches one of the four files above - the set that will conflict.
+"Upstream moved" would fire every week and be ignored. If this repository is a
+real GitHub fork, the repository page also shows how far behind it is, which a
+standalone repository does not.
+
+### Rebasing
+
+    git remote add upstream https://github.com/ml-explore/mlx-swift-examples.git
+    git fetch upstream
+    git rebase upstream/main dai-pipeline
+    # conflicts land in the files marked `dAI:` - keep both sides
+    xcodebuild build -scheme dai-agent -destination 'platform=OS X'
+
+**Then follow the shas.** A rebase rewrites this fork's commits, so the revision
+every consumer pins changes. Both must be updated together:
+
+| Where | What |
+|---|---|
+| `dAI` | `agent/Package.swift`, `NOTICE`, `THIRD-PARTY-NOTICES.md` |
+| `notebookMLX` | `Package.swift`, `NOTICE` |
+
+`ForkPinTests` in each repository binds the resolved revision to the one its
+`NOTICE` names and fails until they agree, so a half-finished bump is caught in
+CI rather than discovered as an index that silently stops matching queries.
+
+Do not skip the build. `swift build` cannot compile MLX's Metal shaders, so a
+rebase that broke the split would still pass it.
+
 ## If you are upstream
 
 The pipeline work is offered, not hoarded. The seam above was designed so it

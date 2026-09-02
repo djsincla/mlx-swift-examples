@@ -1,0 +1,107 @@
+# Notice when upstream changes a file this fork has modified.
+#
+# A fork rots quietly. This one was eight months behind before anybody counted,
+# and three of the four files it changes had moved upstream in the meantime -
+# which is the whole cost of a fork and the one thing nothing was reporting.
+#
+# Deliberately not "upstream moved". Upstream moves constantly and almost none
+# of it touches us; an alert that fires every week is one nobody reads. This
+# fires only when a commit lands on a path this fork has its own version of,
+# because that is the set that will conflict on the next rebase.
+#
+# It also catches the happy ending: if upstream grows its own pipeline support,
+# Pipeline.swift stops being ours alone and the fork can be retired.
+name: Upstream watch
+
+on:
+  schedule:
+    # Mondays. Weekly is often enough for a dependency that moves ~27 commits a
+    # year, and rare enough that the issue means something when it appears.
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare against upstream
+        id: compare
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/ml-explore/mlx-swift-examples.git
+          git fetch -q --no-tags upstream main
+
+          # The files this fork has its own version of. Kept here rather than
+          # derived, so adding a fifth is a deliberate edit in one place -
+          # the same discipline the modification table in DAI-FORK.md needs,
+          # and which it did not have when it said "three files" for four days.
+          FILES="Libraries/MLXLLM/Pipeline.swift
+                 Libraries/MLXLLM/Models/Qwen2.swift
+                 Libraries/MLXLMCommon/Load.swift
+                 Libraries/Embedders/EmbeddingModel.swift"
+
+          BEHIND=$(git rev-list --count HEAD..upstream/main)
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+
+          BODY=$(mktemp)
+          TOUCHED=0
+          for f in $FILES; do
+            n=$(git rev-list --count HEAD..upstream/main -- "$f")
+            [ "$n" -eq 0 ] && continue
+            TOUCHED=$((TOUCHED + 1))
+            {
+              echo "### \`$f\` - $n upstream commit(s)"
+              echo
+              git log --format='- [`%h`](https://github.com/ml-explore/mlx-swift-examples/commit/%H) %s' \
+                HEAD..upstream/main -- "$f"
+              echo
+            } >> "$BODY"
+          done
+
+          echo "touched=$TOUCHED" >> "$GITHUB_OUTPUT"
+          {
+            echo "body<<EOF_BODY"
+            echo "\`dai-pipeline\` is **$BEHIND commits behind** \`ml-explore/mlx-swift-examples@main\`,"
+            echo "and upstream has changed **$TOUCHED of the 4 files this fork modifies**."
+            echo
+            cat "$BODY"
+            echo "Rebasing changes the shas of this fork's commits, so both consumers"
+            echo "must follow: the pins in dAI and notebookMLX, and the revision named"
+            echo "in each of their NOTICE files. \`ForkPinTests\` fails until they agree."
+            echo
+            echo "See [DAI-FORK.md](../blob/dai-pipeline/DAI-FORK.md) for the procedure."
+            echo
+            echo "_Raised by the upstream watch. It updates this issue rather than opening another._"
+            echo "EOF_BODY"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the issue
+        if: steps.compare.outputs.touched != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BODY: ${{ steps.compare.outputs.body }}
+          TITLE: Upstream has changed files this fork modifies
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --state open --search "$TITLE in:title" \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body "$BODY"
+            echo "updated issue #$existing"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi
+
+      - name: Say so when there is nothing to do
+        if: steps.compare.outputs.touched == '0'
+        run: |
+          echo "${{ steps.compare.outputs.behind }} commits behind upstream," \
+               "none touching the files this fork modifies."
