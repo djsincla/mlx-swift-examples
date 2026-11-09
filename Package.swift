@@ -25,6 +25,10 @@ let package = Package(
         .library(
             name: "StableDiffusion",
             targets: ["StableDiffusion"]),
+        // dAI: Next-Concept Modeling inference
+        .library(
+            name: "MLXNCM",
+            targets: ["MLXNCM"]),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.29.1")),
@@ -159,6 +163,29 @@ let package = Package(
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
             ]
+        ),
+        // dAI: Next-Concept Modeling inference
+        .target(
+            name: "MLXNCM",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+            ],
+            path: "Libraries/MLXNCM",
+            exclude: [
+                "README.md"
+            ],
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
+        ),
+        .testTarget(
+            name: "MLXNCMTests",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                "MLXNCM",
+            ],
+            path: "Tests/MLXNCMTests"
         ),
     ]
 )
