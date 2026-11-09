@@ -25,7 +25,8 @@ agree about which layers a machine owns, and none of them are extension points.
 
 ## What differs from upstream
 
-Four files. The first three are the split, marked `dAI:` at each change.
+Four changed files, and one added library. The first three files are the split, marked
+`dAI:` at each change.
 
 | File | Change |
 |---|---|
@@ -33,6 +34,18 @@ Four files. The first three are the split, marked `dAI:` at each change.
 | `Libraries/MLXLLM/Models/Qwen2.swift` | Takes the hidden state from the machine holding the earlier layers, and hands its own on. |
 | `Libraries/MLXLMCommon/Load.swift` | `loadWeights(..., keepingLayers:)` drops the layers this machine does not own and renumbers the rest. |
 | `Libraries/Embedders/EmbeddingModel.swift` | `EmbeddingModelOutput.hiddenStates` and `pooledOutput` made public, so pooling can happen outside the library. |
+
+**Added:** `Libraries/MLXNCM` and `Tests/MLXNCMTests`, inference for
+[Next-Concept Modeling](https://arxiv.org/abs/2610.14162) (Stanford Hazy Research, MIT), and
+their two targets in `Package.swift`, marked `dAI:`. They touch no upstream code, so on a
+rebase they can conflict only in `Package.swift`. Their output is checked code for code
+against the official PyTorch model; see `Libraries/MLXNCM/README.md`. The Xcode project's test
+plan lists only its own targets, so run these tests on the package itself, from a directory
+holding `Package.swift`, `Package.resolved`, `Libraries` and `Tests` but not the project:
+
+    TEST_RUNNER_NCM_MODEL_DIRS=<converted checkpoints> \
+      xcodebuild test -scheme mlx-libraries-Package -destination 'platform=macOS' \
+      -only-testing:MLXNCMTests
 
 **The transport is a protocol the caller supplies.** This library learns nothing
 about certificates, fleets or sockets, and the code that owns those does not have
